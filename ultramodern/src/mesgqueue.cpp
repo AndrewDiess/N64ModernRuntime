@@ -1,3 +1,4 @@
+#include <atomic>
 #include <thread>
 
 #include "blockingconcurrentqueue.h"
@@ -12,6 +13,21 @@ struct QueuedMessage {
 };
 
 static moodycamel::BlockingConcurrentQueue<QueuedMessage> external_messages {};
+
+// SWRS bring-up debug aid (defined in threads.cpp): which queue each game thread is
+// blocked on. Read by the --start monitor in the game's main.cpp. Remove once the port runs.
+namespace ultramodern {
+    extern std::atomic<uint32_t> swrs_debug_blocked_on[64];
+    extern std::atomic<int> swrs_debug_blocked_kind[64];
+    int swrs_debug_slot(OSThread* t);
+}
+static void swrs_debug_mark(OSThread* t, uint32_t mq, int kind) {
+    int i = ultramodern::swrs_debug_slot(t);
+    if (i >= 0) {
+        ultramodern::swrs_debug_blocked_on[i] = mq;
+        ultramodern::swrs_debug_blocked_kind[i] = kind;
+    }
+}
 
 void enqueue_external_message(PTR(OSMesgQueue) mq, OSMesg msg, bool jam) {
     external_messages.enqueue({mq, msg, jam});
@@ -73,8 +89,11 @@ bool do_send(RDRAM_ARG PTR(OSMesgQueue) mq_, OSMesg msg, bool jam, bool block) {
         // Otherwise, yield this thread until the queue has room.
         while (MQ_IS_FULL(mq)) {
             debug_printf("[Message Queue] Thread %d is blocked on send\n", TO_PTR(OSThread, ultramodern::this_thread())->id);
+            OSThread* swrs_t = TO_PTR(OSThread, ultramodern::this_thread());
+            swrs_debug_mark(swrs_t, (uint32_t)mq_, 2);
             ultramodern::thread_queue_insert(PASS_RDRAM GET_MEMBER(OSMesgQueue, mq_, blocked_on_send), ultramodern::this_thread());
             ultramodern::run_next_thread_and_wait(PASS_RDRAM1);
+            swrs_debug_mark(swrs_t, 0, 0);
         }
     }
     
@@ -111,8 +130,11 @@ bool do_recv(RDRAM_ARG PTR(OSMesgQueue) mq_, PTR(OSMesg) msg_, bool block) {
         // Otherwise, yield this thread in a loop until the queue is no longer full
         while (MQ_IS_EMPTY(mq)) {
             debug_printf("[Message Queue] Thread %d is blocked on receive\n", TO_PTR(OSThread, ultramodern::this_thread())->id);
+            OSThread* swrs_t = TO_PTR(OSThread, ultramodern::this_thread());
+            swrs_debug_mark(swrs_t, (uint32_t)mq_, 1);
             ultramodern::thread_queue_insert(PASS_RDRAM GET_MEMBER(OSMesgQueue, mq_, blocked_on_recv), ultramodern::this_thread());
             ultramodern::run_next_thread_and_wait(PASS_RDRAM1);
+            swrs_debug_mark(swrs_t, 0, 0);
         }
     }
 
@@ -135,13 +157,20 @@ bool do_recv(RDRAM_ARG PTR(OSMesgQueue) mq_, PTR(OSMesg) msg_, bool block) {
 extern "C" s32 osSendMesg(RDRAM_ARG PTR(OSMesgQueue) mq_, OSMesg msg, s32 flags) {
     OSMesgQueue *mq = TO_PTR(OSMesgQueue, mq_);
     bool jam = false;
-    
+
+    // SWRS bring-up debug aid: log sends to the game thread's and the file loader's mailboxes.
+    if ((uint32_t)mq_ == 0x801556D0 || (uint32_t)mq_ == 0x801463F0) {
+        fprintf(stderr, "[swrs] send to 0x%08X msg 0x%08X (%s thread %d)\n", (uint32_t)mq_, (uint32_t)msg,
+            ultramodern::is_game_thread() ? "game" : "external",
+            ultramodern::is_game_thread() ? (int)TO_PTR(OSThread, ultramodern::this_thread())->id : -1);
+    }
+
     // Don't directly send to the message queue if this isn't a game thread to avoid contention.
     if (!ultramodern::is_game_thread()) {
         enqueue_external_message(mq_, msg, jam);
         return 0;
     }
-    
+
     // Handle any messages that have been received from an external thread.
     dequeue_external_messages(PASS_RDRAM1);
 

@@ -1,3 +1,4 @@
+#include <atomic>
 #include <cstdio>
 #include <thread>
 #include <cassert>
@@ -182,6 +183,12 @@ void ultramodern::resume_thread_and_wait(RDRAM_ARG OSThread *t) {
     wait_for_resumed(PASS_RDRAM cur_context);
 }
 
+// SWRS bring-up debug aid (defined further down).
+namespace ultramodern {
+    extern std::atomic<OSThread*> swrs_debug_thread[64];
+    int swrs_debug_slot(OSThread* t);
+}
+
 static void _thread_func(RDRAM_ARG PTR(OSThread) self_, PTR(thread_func_t) entrypoint, PTR(void) arg, UltraThreadContext* thread_context) {
     OSThread *self = TO_PTR(OSThread, self_);
     debug_printf("[Thread] Thread created: %d\n", self->id);
@@ -223,6 +230,14 @@ static void _thread_func(RDRAM_ARG PTR(OSThread) self_, PTR(thread_func_t) entry
         run_next_thread(PASS_RDRAM1);
     }
 
+    // SWRS bring-up debug aid: drop the thread from the monitor's list before its context is freed.
+    {
+        int slot = ultramodern::swrs_debug_slot(self);
+        if (slot >= 0) {
+            ultramodern::swrs_debug_thread[slot] = nullptr;
+        }
+    }
+
     // Dispose of this thread now that it's completed or terminated.
     ultramodern::cleanup_thread(thread_context);
 }
@@ -244,9 +259,37 @@ extern "C" void osStartThread(RDRAM_ARG PTR(OSThread) t_) {
     }
 }
 
+// SWRS bring-up debug aid: every created game thread, read by the --start monitor in the
+// game's main.cpp. Remove once the port runs.
+namespace ultramodern {
+    std::atomic<OSThread*> swrs_debug_thread[64];
+    std::atomic<uint32_t> swrs_debug_thread_vram[64];
+    std::atomic<uint32_t> swrs_debug_thread_entry[64];
+    std::atomic<uint32_t> swrs_debug_blocked_on[64];
+    std::atomic<int> swrs_debug_blocked_kind[64]; // 0 none, 1 receive, 2 send
+    std::atomic<int> swrs_debug_thread_count{0};
+
+    int swrs_debug_slot(OSThread* t) {
+        int n = swrs_debug_thread_count.load();
+        for (int i = 0; i < n; i++) {
+            if (swrs_debug_thread[i].load() == t) {
+                return i;
+            }
+        }
+        return -1;
+    }
+}
+
 extern "C" void osCreateThread(RDRAM_ARG PTR(OSThread) t_, OSId id, PTR(thread_func_t) entrypoint, PTR(void) arg, PTR(void) sp, OSPri pri) {
     debug_printf("[os] Create Thread %d\n", id);
     OSThread *t = TO_PTR(OSThread, t_);
+    if (ultramodern::swrs_debug_slot(t) < 0 && ultramodern::swrs_debug_thread_count.load() < 64) {
+        int i = ultramodern::swrs_debug_thread_count.load();
+        ultramodern::swrs_debug_thread[i] = t;
+        ultramodern::swrs_debug_thread_vram[i] = (uint32_t)t_;
+        ultramodern::swrs_debug_thread_entry[i] = (uint32_t)entrypoint;
+        ultramodern::swrs_debug_thread_count = i + 1;
+    }
     
     t->next = NULLPTR;
     t->queue = NULLPTR;

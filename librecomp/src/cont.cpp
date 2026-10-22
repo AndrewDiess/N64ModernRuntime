@@ -42,6 +42,9 @@ extern "C" void osContStartReadData_recomp(uint8_t* rdram, recomp_context* ctx) 
     _return<s32>(ctx, ret);
 }
 
+// Game glue hook (Rogue Squadron bring-up: input recording and replay), called after the pads are filled in.
+extern "C" void swrs_input_filter(uint8_t* rdram, int32_t data);
+
 extern "C" void osContGetReadData_recomp(uint8_t* rdram, recomp_context* ctx) {
     PTR(OSContPad) data = _arg<0, PTR(OSContPad)>(rdram, ctx);
 
@@ -57,6 +60,8 @@ extern "C" void osContGetReadData_recomp(uint8_t* rdram, recomp_context* ctx) {
             MEM_B(6 * controller + 4, data) = dummy_data[controller].err_no;
         }
     }
+
+    swrs_input_filter(rdram, (int32_t)data);
 }
 
 extern "C" void osContStartQuery_recomp(uint8_t * rdram, recomp_context * ctx) {

@@ -7,6 +7,11 @@
 
 #include "ultramodern/ultramodern.hpp"
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
+#endif
+
 #include "recomp.h"
 #include "recompiler/context.h"
 #include "overlays.hpp"
@@ -365,6 +370,23 @@ extern "C" recomp_func_t * get_function(int32_t addr) {
     auto func_find = func_map.find(addr);
     if (func_find == func_map.end()) {
         fprintf(stderr, "Failed to find function at 0x%08X\n", addr);
+#ifdef _WIN32
+        // SWRS bring-up debug aid: host stack offsets into the exe, to find the caller
+        // (symbolize with llvm-symbolizer 0x140000000+offset). Remove once the port runs.
+        {
+            void* frames[12];
+            USHORT n = RtlCaptureStackBackTrace(0, 12, frames, nullptr);
+            uintptr_t base = (uintptr_t)GetModuleHandleW(nullptr);
+            fprintf(stderr, "  host stack:");
+            for (USHORT i = 0; i < n; i++) {
+                uintptr_t f = (uintptr_t)frames[i];
+                if (f >= base && f < base + 0x10000000) {
+                    fprintf(stderr, " exe+0x%llX", (unsigned long long)(f - base));
+                }
+            }
+            fprintf(stderr, "\n");
+        }
+#endif
         assert(false);
         std::exit(EXIT_FAILURE);
     }
