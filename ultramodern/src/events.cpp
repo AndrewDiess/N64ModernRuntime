@@ -174,6 +174,46 @@ extern moodycamel::LightweightSemaphore graphics_shutdown_ready;
 
 void set_dummy_vi(bool odd);
 
+// AI interrupt pacing. The real AI raises its interrupt when its two-buffer DMA FIFO has room,
+// i.e. as fast as the buffers play. Games that generate a fixed-size buffer per AI event (Rogue
+// Squadron: 192 stereo frames at 22050 Hz, ~115 per second) starve with one event per VI. When
+// less than three buffers are queued for playback, the oldest buffer the game handed over is
+// copied (only then, like the AI's DMA, so the RSP task filling it has run) and the event is
+// sent; fall back to a timed event if the game stops delivering buffers.
+static std::thread ai_thread;
+
+void ai_thread_func() {
+    ultramodern::set_native_thread_name("AI Thread");
+    using namespace std::chrono_literals;
+    auto last_sent = std::chrono::steady_clock::now();
+
+    while (!exited) {
+        std::this_thread::sleep_for(1ms);
+        if (!ultramodern::is_game_started()) {
+            continue;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        const bool timed_out = (now - last_sent) >= 100ms;
+        // A buffer starts playing once less than three buffers are queued for output. Its
+        // samples are read only now, as the AI's DMA would, and the AI event tells the game
+        // a FIFO slot is free.
+        const uint32_t buffer_frames = std::max(ultramodern::get_last_audio_buffer_frames(), 64U);
+        if (!timed_out && ultramodern::get_queued_audio_frames() >= 3 * buffer_frames) {
+            continue;
+        }
+        if (!ultramodern::play_pending_audio_buffer() && !timed_out) {
+            continue; // nothing handed over yet
+        }
+
+        uint8_t* rdram = events_context.rdram;
+        std::lock_guard lock{ events_context.message_mutex };
+        if (events_context.ai.mq != NULLPTR) {
+            osSendMesg(PASS_RDRAM events_context.ai.mq, events_context.ai.msg, OS_MESG_NOBLOCK);
+            last_sent = now;
+        }
+    }
+}
+
 void vi_thread_func() {
     ultramodern::set_native_thread_name("VI Thread");
     // This thread should be prioritized over every other thread in the application, as it's what allows
@@ -237,11 +277,7 @@ void vi_thread_func() {
                 }
                 remaining_retraces = cur_state->retrace_count;
             }
-            if (events_context.ai.mq != NULLPTR) {
-                if (osSendMesg(PASS_RDRAM events_context.ai.mq, events_context.ai.msg, OS_MESG_NOBLOCK) == -1) {
-                    //printf("Game skipped a AI frame!\n");
-                }
-            }
+            // AI events are sent by ai_thread_func, paced by playback (see there).
         }
 
         if (events_callbacks.vi_callback != nullptr) {
@@ -454,6 +490,11 @@ extern "C" void osViSetMode(RDRAM_ARG PTR(OSViMode) mode_) {
     ViState* next_state = events_context.vi.get_next_state();
     next_state->mode = mode;
     next_state->control = next_state->mode->comRegs.ctrl;
+    // libultra's osViSetMode replaces the whole state word (__osViNext->state =
+    // VI_STATE_MODE_UPDATED), which clears VI_STATE_BLACK and VI_STATE_REPEATLINE.
+    // Rogue Squadron blanks the screen with osViBlack(1) at boot and relies on this to
+    // unblank it; it never calls osViBlack(0).
+    next_state->state = 0;
 }
 
 #define OS_VI_GAMMA_ON          0x0001
@@ -604,11 +645,13 @@ void ultramodern::init_events(RDRAM_ARG ultramodern::renderer::WindowHandle wind
     }
 
     events_context.vi.thread = std::thread{ vi_thread_func };
+    ai_thread = std::thread{ ai_thread_func };
 }
 
 void ultramodern::join_event_threads() {
     events_context.sp.gfx_thread.join();
     events_context.vi.thread.join();
+    ai_thread.join();
 
     // Send a null RSP task to indicate that the RSP task thread should exit.
     events_context.sp_task_queue.enqueue(nullptr);

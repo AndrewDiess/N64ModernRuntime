@@ -275,7 +275,15 @@ extern "C" void osStopThread(RDRAM_ARG PTR(OSThread) t_) {
         ultramodern::run_next_thread_and_wait(PASS_RDRAM1);
     }
     else {
-        assert(false);
+        // Stopping another thread: take it off whatever queue it's on (running queue or a
+        // message queue's blocked list). Its host thread stays parked until osStartThread
+        // schedules it again. Only one game thread runs at a time, so it isn't running now.
+        OSThread* t = TO_PTR(OSThread, t_);
+        if (t->state != OSThreadState::STOPPED && t->queue != NULLPTR) {
+            ultramodern::thread_queue_remove(PASS_RDRAM t->queue, t_);
+        }
+        t->queue = NULLPTR;
+        t->state = OSThreadState::STOPPED;
     }
 }
 

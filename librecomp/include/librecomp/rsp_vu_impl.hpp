@@ -190,8 +190,8 @@ auto RSP::LFV(r128& vt, cr32& rs, s8 imm) -> void {
     auto end = std::min(start + 8, 16);
     r128 tmp;
     for (u32 offset = 0; offset < 4; offset++) {
-        tmp.element(offset + 0) = RSP_MEM_B(0, address + (index + offset * 4 + 0 & 15)) << 7;
-        tmp.element(offset + 4) = RSP_MEM_B(0, address + (index + offset * 4 + 8 & 15)) << 7;
+        tmp.element(offset + 0) = RSP_MEM_BU(0, address + (index + offset * 4 + 0 & 15)) << 7;
+        tmp.element(offset + 4) = RSP_MEM_BU(0, address + (index + offset * 4 + 8 & 15)) << 7;
     }
     for (u32 offset = start; offset < end; offset++) {
         vt.byte(offset) = tmp.byte(offset);
@@ -204,7 +204,7 @@ auto RSP::LHV(r128& vt, cr32& rs, s8 imm) -> void {
     auto index = (address & 7) - e;
     address &= ~7;
     for (u32 offset = 0; offset < 8; offset++) {
-        vt.element(offset) = RSP_MEM_B(0, address + (index + offset * 2 & 15)) << 7;
+        vt.element(offset) = RSP_MEM_BU(0, address + (index + offset * 2 & 15)) << 7;
     }
 }
 
@@ -281,7 +281,7 @@ auto RSP::LUV(r128& vt, cr32& rs, s8 imm) -> void {
     auto index = (address & 7) - e;
     address &= ~7;
     for (u32 offset = 0; offset < 8; offset++) {
-        vt.element(offset) = RSP_MEM_B(0, address + (index + offset & 15)) << 7;
+        vt.element(offset) = RSP_MEM_BU(0, address + (index + offset & 15)) << 7;
     }
 }
 

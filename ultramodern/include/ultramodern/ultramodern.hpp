@@ -98,6 +98,12 @@ void init_audio();
 void set_audio_frequency(uint32_t freq);
 void queue_audio_buffer(RDRAM_ARG PTR(s16) audio_data, uint32_t byte_count);
 uint32_t get_remaining_audio_bytes();
+// AI pacing (events.cpp): queue_audio_buffer only records the buffer, like the AI's DMA FIFO.
+// play_pending_audio_buffer copies the oldest recorded buffer to the output when playback
+// would start it, so the RSP has finished writing it. Returns false if none is pending.
+bool play_pending_audio_buffer();
+uint32_t get_last_audio_buffer_frames();
+uint32_t get_queued_audio_frames();
 
 struct audio_callbacks_t {
     using queue_samples_t = void(int16_t*, size_t);

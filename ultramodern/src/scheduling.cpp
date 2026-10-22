@@ -29,6 +29,22 @@ void ultramodern::check_running_queue(RDRAM_ARG1) {
     }
 }
 
+void dequeue_external_messages(RDRAM_ARG1); // mesgqueue.cpp
+
+// Give the CPU to the highest-priority runnable thread if it's at least this thread's
+// priority (libultra puts the yielding thread back on the run queue and redispatches).
+extern "C" void osYieldThread(RDRAM_ARG1) {
+    dequeue_external_messages(PASS_RDRAM1);
+    if (!ultramodern::thread_queue_empty(PASS_RDRAM ultramodern::running_queue)) {
+        OSThread* next_thread = TO_PTR(OSThread, ultramodern::thread_queue_peek(PASS_RDRAM ultramodern::running_queue));
+        OSThread* self = TO_PTR(OSThread, ultramodern::this_thread());
+        if (next_thread->priority >= self->priority) {
+            ultramodern::thread_queue_pop(PASS_RDRAM ultramodern::running_queue);
+            swap_to_thread(PASS_RDRAM next_thread);
+        }
+    }
+}
+
 extern "C" void pause_self(RDRAM_ARG1) {
     while (true) {
         // Wait until an external message arrives, then allow the next thread to run.
